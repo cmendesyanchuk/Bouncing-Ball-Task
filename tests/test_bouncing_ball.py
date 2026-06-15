@@ -78,8 +78,8 @@ def test_sample_target_iteration_and_basic_content(default_task):
             sequence_length == default_task.sequence_length
         ), f"The number of target iterations ({sequence_length}) should match the sequence length ({default_task.sequence_length})."
         assert (
-            features == 5
-        ), f"The number of features ({features}) should match the number of task features (5)."
+            features == 6
+        ), f"The number of features ({features}) should match the number of task features (6)."
 
 
 def test_sample_target_has_no_invalid_values(default_task):
@@ -121,12 +121,13 @@ def test_sample_target_has_correct_min_max_values(default_task):
         # Check the shapes of the outputs are as expected
         batch_size, sequence_length, features = array.shape
 
-        # Check the max and min values are correct
+        # Check the max and min values are correct (only position + color features)
+        pos_color = array[:, :, :5]
         min_vals = np.concatenate(
             [ball_radius - velocity_mag * dt, np.zeros((batch_size, 3))],
             axis=-1,
         )
-        assert np.all(min_vals <= array.min(axis=1))
+        assert np.all(min_vals <= pos_color.min(axis=1))
 
         max_vals = np.concatenate(
             [
@@ -135,7 +136,11 @@ def test_sample_target_has_correct_min_max_values(default_task):
             ],
             axis=-1,
         )
-        assert np.all(array.max(axis=1) <= max_vals)
+        assert np.all(pos_color.max(axis=1) <= max_vals)
+
+        # Check shape index is in valid range [0, 2]
+        shape_vals = array[:, :, 5]
+        assert np.all(shape_vals >= 0) and np.all(shape_vals <= 2)
 
 
 @pytest.mark.parametrize(
@@ -277,7 +282,7 @@ def test_correct_sequences_for_each_sequence_modes(sequence_mode):
 def test_correct_samples_and_targets_for_each_sequence_modes(sequence_mode):
     batch_size = 2
     sequence_length = 5
-    features = 5
+    features = 6
     task = BouncingBallTask(
         batch_size=batch_size,
         sequence_mode=sequence_mode,
@@ -369,7 +374,7 @@ def test_sequence_modes_correctly_reset(sequence_mode):
 def test_return_change_correctly_returns_changes(return_change):
     batch_size = 2
     sequence_length = 10
-    features = 5
+    features = 6
     task = BouncingBallTask(
         sequence_mode="static",
         batch_size=batch_size,
@@ -395,7 +400,7 @@ def test_return_change_correctly_returns_changes(return_change):
 def test_return_change_modes_have_correct_shapes(return_change_mode):
     batch_size = 2
     sequence_length = 10
-    features = 5
+    features = 6
     if (
         return_change_mode.lower()
         not in BouncingBallTask.valid_return_change_modes
@@ -422,17 +427,15 @@ def test_return_change_modes_have_correct_shapes(return_change_mode):
         assert task.samples.shape == (batch_size, sequence_length, features)
 
         if task.return_change_mode == "any":
-            # For "any", changes should be combined for one extra feature
+            # "any": 1 change column added
             assert task.targets.shape[-1] == features + 1
         elif task.return_change_mode == "feature":
-            # For "feature", velocity and color changes are added separately,
-            # resulting in two extra features
-            assert task.targets.shape[-1] == features + 2
+            # "feature": any_vc, any_cc, any_sc = 3 change columns added
+            assert task.targets.shape[-1] == features + 3
 
         elif task.return_change_mode == "source":
-            # For "source", changes from the sources of velocity and color
-            # changes are added
-            assert task.targets.shape[-1] == features + 4
+            # "source": vcb, vcr, ccb, ccr, scr = 5 change columns added
+            assert task.targets.shape[-1] == features + 5
 
 
 @pytest.mark.parametrize("initial_timestep_is_changepoint", [True, False])
@@ -480,12 +483,12 @@ def test_grayzone_and_color_mask_mode(color_mask_mode):
                 task.mask_start + task.ball_radius < task.samples[:, :, 0],
                 task.samples[:, :, 0] < task.mask_end - task.ball_radius,
             )
-        ][:, 2:]
+        ][:, 2:5]
         == task.mask_color
     ).all()
 
     # Check the unique colors are what we expect them to be
-    colors = task.samples[:, :, 2:].reshape(batch_size * sequence_length, 3)
+    colors = task.samples[:, :, 2:5].reshape(batch_size * sequence_length, 3)
     unique_colors = np.unique(colors, axis=0)
     num_unique_colors = len(unique_colors)
     num_valid_colors = len(task.valid_colors) + 1  # Add one for gray
@@ -496,8 +499,8 @@ def test_grayzone_and_color_mask_mode(color_mask_mode):
         task.samples[:, :, 0] < task.mask_start + task.ball_radius / 4,
         task.mask_start - task.ball_radius / 4 < task.samples[:, :, 0],
     )
-    transition_colors = task.samples[transition_indices][:, 2:]
-    initial_colors = task.targets[transition_indices][:, 2:]
+    transition_colors = task.samples[transition_indices][:, 2:5]
+    initial_colors = task.targets[transition_indices][:, 2:5]
 
     if color_mask_mode.lower() == "fade":
         # Consider adding test for the fading colors itself
@@ -548,7 +551,7 @@ def test_pvc_causes_correct_random_velocity_changes(
         initial_timestep_is_changepoint=False,
     )
     # Subselect all instances where there was a random velocity change
-    timesteps_velocity_changes_random = task.targets[task.targets[..., -3] == 1]
+    timesteps_velocity_changes_random = task.targets[task.targets[..., -4] == 1]
 
     # Fraction of random velocity changes / total timesteps should match pvc
     assert isclose(
@@ -581,8 +584,8 @@ def test_pccovc_causes_correct_color_changes(
     )
 
     # Subselect all instances where there was a velocity change
-    timesteps_velocity_changes = task.targets[task.targets[..., -2] == 1][
-        :, -2:
+    timesteps_velocity_changes = task.targets[task.targets[..., -3] == 1][
+        :, -3:-1
     ]
 
     # Number of color changes encountered on a bounce should match pccovc
@@ -613,10 +616,10 @@ def test_bounce_and_random_velocity_changes_occur_at_correct_locations(pvc):
 
     # Subselect for timesteps where there is a velocity change
     timesteps_velocity_changes_bounce = task.targets[
-        task.targets[..., -4] == 1
+        task.targets[..., -5] == 1
     ][:, :2]
     timesteps_velocity_changes_random = task.targets[
-        task.targets[..., -3] == 1
+        task.targets[..., -4] == 1
     ][:, :2]
 
     # Define the lower bound of a bounce position in the tops of the frame and
@@ -677,8 +680,8 @@ def test_bounce_and_random_color_changes_occur_correctly(
     )
 
     # Subselect for timesteps where there is a color change
-    indices_color_changes_bounce = np.where(task.targets[..., -2] == 1)
-    indices_color_changes_random = np.where(task.targets[..., -1] == 1)
+    indices_color_changes_bounce = np.where(task.targets[..., -3] == 1)
+    indices_color_changes_random = np.where(task.targets[..., -2] == 1)
 
     # Combine for aggregate color change testing
     indices_batch_color_changes, indices_timestep_color_changes = (
@@ -717,7 +720,7 @@ def test_bounce_and_random_color_changes_occur_correctly(
         task.targets[
             indices_batch_color_changes_random,
             indices_timestep_color_changes_random,
-        ][:, -4:-2]
+        ][:, -5:-3]
         == 0
     )
 
@@ -728,7 +731,7 @@ def test_bounce_and_random_color_changes_occur_correctly(
                 indices_batch_color_changes_bounce,
                 indices_timestep_color_changes_bounce
                 - color_change_bounce_delay,
-            ][:, -4:-2]
+            ][:, -5:-3]
             == 1,
             axis=-1,
         )
@@ -755,16 +758,16 @@ def test_pccnvc_causes_correct_color_changes(
         color_change_bounce_delay=0,
     )
 
-    # Subselect all instances where there was a velocity change
-    timesteps_color_changes = task.targets[task.targets[..., -1] == 1]
+    # Subselect all instances where there was a color change (any_cc)
+    timesteps_color_changes = task.targets[task.targets[..., -2] == 1]
 
     # There should be no velocity changes at these locations since pccovc is 0
-    assert np.all(timesteps_color_changes[:, -2] == 0)
+    assert np.all(timesteps_color_changes[:, -3] == 0)
 
     # Precompute
     total_color_changes = len(timesteps_color_changes)
     total_timesteps = task.targets[:, :, 0].size
-    total_bounces = len(task.targets[task.targets[..., -1] == 1])
+    total_bounces = len(task.targets[task.targets[..., -2] == 1])
 
     # Percentage should relfect number of random color changes in timesteps where
     # there is no bounce
@@ -809,15 +812,15 @@ def test_min_t_color_change_causes_predictable_change_statistics(
     )
 
     # Subselect all instances where there was a color change
-    timesteps_color_change_bounce = task.targets[task.targets[..., -2] == 1]
-    timesteps_color_change_random = task.targets[task.targets[..., -1] == 1]
+    timesteps_color_change_bounce = task.targets[task.targets[..., -3] == 1]
+    timesteps_color_change_random = task.targets[task.targets[..., -2] == 1]
     timesteps_color_changes = np.concatenate(
         [timesteps_color_change_random, timesteps_color_change_bounce]
     )
 
     # Subselect all instances where there was a velocity change
-    timesteps_velocity_change_bounce = task.targets[task.targets[..., -4] == 1]
-    timesteps_velocity_change_random = task.targets[task.targets[..., -3] == 1]
+    timesteps_velocity_change_bounce = task.targets[task.targets[..., -5] == 1]
+    timesteps_velocity_change_random = task.targets[task.targets[..., -4] == 1]
     timesteps_velocity_changes = np.concatenate(
         [timesteps_velocity_change_random, timesteps_velocity_change_bounce]
     )
@@ -930,12 +933,12 @@ def test_color_change_bounce_delay_causes_correct_color_changes(
         color_change_bounce_delay=color_change_bounce_delay,
     )
     # Make sure changing the color change delay does not affect unrelated changes
-    assert np.all(task.targets[..., -3] == 0)  # Random vel changes
-    assert np.all(task.targets[..., -1] == 0)  # Random color changes
+    assert np.all(task.targets[..., -4] == 0)  # Random vel changes
+    assert np.all(task.targets[..., -2] == 0)  # Random color changes
 
     # Get the indices of the velocity and color changes
-    _, indices_velocity_change_bounce = np.where(task.targets[..., -4] == 1)
-    _, indices_color_change_bounce = np.where(task.targets[..., -2] == 1)
+    _, indices_velocity_change_bounce = np.where(task.targets[..., -5] == 1)
+    _, indices_color_change_bounce = np.where(task.targets[..., -3] == 1)
 
     # Get the locations for where color changes should be
     predicted_indices_color_change_bounce = (
