@@ -1708,7 +1708,6 @@ class BouncingBallTask:
                     rand_for_color[t, :, 1] <= self.probability_color_change_no_velocity_change,
                 ),
             )
-
             # Col-1 pccosc: vel not changed, shape changed.
             # Uses rand_for_shape_color — independent from rand_for_color[:, :, 1]
             # so pccnvc cooldowns can never suppress shape-triggered color changes.
@@ -1759,14 +1758,22 @@ class BouncingBallTask:
                 color_change_array[t, :, 0],
                 1
             ] = 1.0
-            # pccosc cooldown: suppress rand_for_shape_color only, leaving
-            # rand_for_color[:, :, 1] untouched so pccnvc is unaffected
+            # pccosc cooldown: suppress rand_for_shape_color so pccosc can't re-fire
             rand_for_shape_color[
                 t + 1 : t + self.min_t_color_change_after_shape_change + 1,
                 np.logical_and(
                     color_change_array[t, :, 1],
                     shape_triggered_color_change_array[t],
                 ),
+            ] = 1.0
+            # Also suppress rand_for_color[:, :, 1] so pccnvc can't fire during the same window
+            rand_for_color[
+                t + 1 : t + self.min_t_color_change_after_shape_change + 1,
+                np.logical_and(
+                    color_change_array[t, :, 1],
+                    shape_triggered_color_change_array[t],
+                ),
+                1,
             ] = 1.0
             # pccnvc cooldown: suppress rand_for_color[:, :, 1] only
             rand_for_color[
