@@ -13,7 +13,7 @@ from loguru import logger
 from PIL import Image, ImageDraw
 
 from bouncing_ball_task import index, defaults
-from bouncing_ball_task.constants import CONSTANT_COLOR, DEFAULT_COLORS
+from bouncing_ball_task.constants import CONSTANT_COLOR, DEFAULT_COLORS, DEFAULT_SHAPES
 from bouncing_ball_task.utils import gif, logutils, pyutils
 
 
@@ -31,17 +31,19 @@ class BouncingBallTask:
     valid_return_change_modes = {
         "any",  # Return int for if any change is detected - len 1
         "feature",
-        # Return int for changes in each feature - len 2
+        # Return int for changes in each feature - len 3
         #   Target change indices:
-        #     targets[:, : -2] - Any Velocity Change
-        #     targets[:, : -1] - Any Color Change        
-        "source",        
-        # Return int for changes split by the source of the change - len 4
+        #     targets[:, -3] - Any Velocity Change
+        #     targets[:, -2] - Any Color Change
+        #     targets[:, -1] - Any Shape Change
+        "source",
+        # Return int for changes split by the source of the change - len 5
         #   Target change indices:
-        #     targets[:, : -4] - Velocity Change Bounce - vcr
-        #     targets[:, : -3] - Velocity Change Random - vcb
-        #     targets[:, : -2] - Color Change bounce - ccb
-        #     targets[:, : -1] - Color change random - ccr        
+        #     targets[:, -5] - Velocity Change Bounce
+        #     targets[:, -4] - Velocity Change Random
+        #     targets[:, -3] - Color Change Bounce
+        #     targets[:, -2] - Color Change Random
+        #     targets[:, -1] - Shape Change Random
     }
     valid_sequence_modes = {
         "static",  # Sequence is repeated on each iter
@@ -84,6 +86,12 @@ class BouncingBallTask:
         probability_color_change_on_velocity_change: Union[
             float, Callable[[int], np.ndarray]
         ] = 1.0,
+        probability_color_change_on_shape_change: Union[
+            float, Callable[[int], np.ndarray]
+        ] = 0.0,
+        probability_color_change_on_velocity_and_shape_change: Union[
+            float, Callable[[int], np.ndarray]
+        ] = 1.0,
         initial_position: Optional[Iterable[float]] = None,
         same_xy_velocity: bool = False,
         batch_size: int = 2,
@@ -113,6 +121,7 @@ class BouncingBallTask:
         reset_after_iter: bool = False,
         min_t_color_change_after_random: int = 5,
         min_t_color_change_after_bounce: int = 5,
+        min_t_color_change_after_shape_change: int = 5,
         min_t_bounce_color_change_after_random: int = 3,
         min_t_velocity_change_after_random: int = 5,
         min_t_velocity_change_after_bounce: int = 5,
@@ -121,7 +130,8 @@ class BouncingBallTask:
         forced_velocity_bounce_x: Optional[list[int]] = None,
         forced_velocity_bounce_y: Optional[list[int]] = None,
         forced_velocity_resamples: Optional[list[int]] = None,
-        forced_color_changes: Optional[list[int]] = None,            
+        forced_color_changes: Optional[list[int]] = None,
+        forced_shape_changes: Optional[list[int]] = None,
         seed: Optional[int] = None,
         initial_velocity_points_away_from_grayzone: bool = True,
         debug: bool = False,
@@ -135,6 +145,13 @@ class BouncingBallTask:
         initial_timestep_is_changepoint: bool = True,
         color_change_bounce_delay: int = 0,
         color_change_random_delay: int = 0,
+        probability_shape_change: Union[
+            float, Callable[[int], np.ndarray]
+        ] = 0.001,
+        min_t_shape_change_after_random: int = 15,
+        warmup_t_no_rand_shape_change: int = 3,
+        valid_shapes: Optional[Iterable] = None,
+        initial_shape: Optional[Iterable[int]] = None,
         transitioning_change_mode: Optional[str] = None,
         transition_tol: int = 5,
         samples=None,
@@ -153,6 +170,7 @@ class BouncingBallTask:
         
         self.min_t_color_change_after_random = min_t_color_change_after_random
         self.min_t_color_change_after_bounce = min_t_color_change_after_bounce
+        self.min_t_color_change_after_shape_change = min_t_color_change_after_shape_change
         self.min_t_bounce_color_change_after_random = min_t_bounce_color_change_after_random        
         self.min_t_velocity_change_after_random = min_t_velocity_change_after_random
         self.min_t_velocity_change_after_bounce = min_t_velocity_change_after_bounce
@@ -171,6 +189,10 @@ class BouncingBallTask:
         self.color_change_target_indices = (
             np.arange(self.sequence_length)[:, None] + self.color_change_delay
         )
+
+        self.probability_shape_change = probability_shape_change
+        self.min_t_shape_change_after_random = min_t_shape_change_after_random
+        self.warmup_t_no_rand_shape_change = warmup_t_no_rand_shape_change
 
         # Which timestep in the future should we return as the target
         self.target_future_timestep = target_future_timestep
@@ -196,12 +218,16 @@ class BouncingBallTask:
         self.probability_velocity_change = None
         self.probability_color_change_no_velocity_change = None
         self.probability_color_change_on_velocity_change = None
+        self.probability_color_change_on_shape_change = None
+        self.probability_color_change_on_velocity_and_shape_change = None
 
         # Store callables internally
         self._set_callables(
             probability_velocity_change,
             probability_color_change_no_velocity_change,
             probability_color_change_on_velocity_change,
+            probability_color_change_on_shape_change,
+            probability_color_change_on_velocity_and_shape_change,
         )
 
         self.pccnvc_lower = pccnvc_lower
@@ -276,6 +302,17 @@ class BouncingBallTask:
             valid_colors,
             num_colors,
         )
+
+        # Initialize shape parameters (circle=0, square=1, diamond=2)
+        self.valid_shapes = list(DEFAULT_SHAPES) if valid_shapes is None else list(valid_shapes)
+        self.num_shapes = len(self.valid_shapes)
+        if initial_shape is None:
+            self._shape_index = np.random.randint(0, self.num_shapes, size=self.batch_size)
+        else:
+            self._shape_index = np.array(initial_shape)
+        self.initial_shape = self._shape_index.copy()
+        # Used by shape_sampler to know how many steps to advance each batch element
+        self.shape_change_indices = np.zeros(self.batch_size, dtype=int)
 
         self.sample_mode = sample_mode
         self.target_mode = target_mode
@@ -386,6 +423,14 @@ class BouncingBallTask:
         )
         self.forced_color_changes_array[self.forced_color_changes] = True
 
+        self.forced_shape_changes = (
+            [] if forced_shape_changes is None else list(forced_shape_changes)
+        )
+        self.forced_shape_changes_array = np.zeros(
+            (self.sequence_length, self.batch_size), dtype=bool
+        )
+        self.forced_shape_changes_array[self.forced_shape_changes] = True
+
         self.reset_tracking()
 
         # # Initialize the color change count to zeros
@@ -408,6 +453,9 @@ class BouncingBallTask:
         self.initial_timestep_is_changepoint = initial_timestep_is_changepoint
         self.initial_changes = (
             np.ones((self.batch_size, 2)) * self.initial_timestep_is_changepoint
+        )
+        self.initial_shape_changes = (
+            np.ones((self.batch_size, 1)) * self.initial_timestep_is_changepoint
         )
 
         # Run through the sequence once for specific modes upon initialization
@@ -556,6 +604,8 @@ class BouncingBallTask:
         probability_velocity_change,
         probability_color_change_no_velocity_change,
         probability_color_change_on_velocity_change,
+        probability_color_change_on_shape_change,
+        probability_color_change_on_velocity_and_shape_change,
     ):
         """Store the callable or float values."""
         self._callable_probability_velocity_change = probability_velocity_change
@@ -564,6 +614,12 @@ class BouncingBallTask:
         )
         self._callable_probability_color_change_on_velocity_change = (
             probability_color_change_on_velocity_change
+        )
+        self._callable_probability_color_change_on_shape_change = (
+            probability_color_change_on_shape_change
+        )
+        self._callable_probability_color_change_on_velocity_and_shape_change = (
+            probability_color_change_on_velocity_and_shape_change
         )
 
     def resample_change_probabilities(self, batch_size: int):
@@ -632,6 +688,30 @@ class BouncingBallTask:
         else:
             self.probability_color_change_on_velocity_change = (
                 self._callable_probability_color_change_on_velocity_change
+            )
+
+        # Process probability_color_change_on_shape_change (pccosc)
+        if callable(self._callable_probability_color_change_on_shape_change):
+            self.probability_color_change_on_shape_change = (
+                self._callable_probability_color_change_on_shape_change(batch_size)
+            )
+        else:
+            self.probability_color_change_on_shape_change = (
+                self._callable_probability_color_change_on_shape_change
+            )
+
+        # Process probability_color_change_on_velocity_and_shape_change (pccovasc)
+        if callable(
+            self._callable_probability_color_change_on_velocity_and_shape_change
+        ):
+            self.probability_color_change_on_velocity_and_shape_change = (
+                self._callable_probability_color_change_on_velocity_and_shape_change(
+                    batch_size
+                )
+            )
+        else:
+            self.probability_color_change_on_velocity_and_shape_change = (
+                self._callable_probability_color_change_on_velocity_and_shape_change
             )
 
         # Update color related probabilities
@@ -736,67 +816,71 @@ class BouncingBallTask:
 
         return flattened_vector, flattened_bin_indices, bins
 
-    def sample_parameter_transformation(self, position, masked_color, color):
+    def sample_parameter_transformation(self, position, masked_color, color, shape):
         return position, masked_color
 
-    def sample_array_transformation(self, position, masked_color, color):
-        return self.array_transformation(position, masked_color)
+    def sample_array_transformation(self, position, masked_color, color, shape):
+        return self.array_transformation(position, masked_color, shape)
 
     def sample_parameter_array_transformation(
-        self, position, masked_color, color
+        self, position, masked_color, color, shape
     ):
-        return np.concatenate([position, masked_color], axis=1, dtype=np.single)
+        return np.concatenate([position, masked_color, shape[:, None]], axis=1, dtype=np.single)
 
     def sample_parameter_array_batch_transformation(
-        self, position, masked_color, color
+        self, position, masked_color, color, shape
     ):
-        return np.concatenate([position, masked_color], axis=1, dtype=np.single)
+        return np.concatenate([position, masked_color, shape[:, None]], axis=1, dtype=np.single)
 
     def target_parameter_transformation(
-        self, position, masked_color, color, velocity_change, color_change
+        self, position, masked_color, color, shape, velocity_change, color_change, shape_change
     ):
         return color
 
     def target_array_transformation(
-        self, position, masked_color, color, velocity_change, color_change
+        self, position, masked_color, color, shape, velocity_change, color_change, shape_change
     ):
-        return self.array_transformation(position, color)
+        return self.array_transformation(position, color, shape)
 
     def target_parameter_array_transformation(
-        self, position, masked_color, color, velocity_change, color_change
+        self, position, masked_color, color, shape, velocity_change, color_change, shape_change
     ):
         return np.concatenate(
-            [position, color]
-            + self.get_change_arrays(velocity_change, color_change),
+            [position, color, shape[:, None]]
+            + self.get_change_arrays(velocity_change, color_change, shape_change),
             axis=1,
             dtype=np.single,
         )
 
     def target_parameter_array_batch_transformation(
-        self, position, masked_color, color, velocity_change, color_change
+        self, position, masked_color, color, shape, velocity_change, color_change, shape_change
     ):
         return np.concatenate(
-            [position, color]
-            + self.get_change_arrays(velocity_change, color_change),
+            [position, color, shape[:, None]]
+            + self.get_change_arrays(velocity_change, color_change, shape_change),
             axis=1,
             dtype=np.single,
         )
 
-    def get_change_arrays(self, velocity_change, color_change):
+    def get_change_arrays(self, velocity_change, color_change, shape_change):
         if not self.return_change:
             return []
 
         if self.return_change_mode == "source":
-            return [velocity_change, color_change]
+            return [velocity_change, color_change, shape_change]
 
         any_velocity_change = velocity_change.any(axis=-1, keepdims=True)
         any_color_change = color_change.any(axis=-1, keepdims=True)
+        any_shape_change = shape_change.any(axis=-1, keepdims=True)
 
         if self.return_change_mode == "feature":
-            return [any_velocity_change, any_color_change]
+            return [any_velocity_change, any_color_change, any_shape_change]
 
         elif self.return_change_mode == "any":
-            return [np.logical_or(any_velocity_change, any_color_change)]
+            return [np.logical_or(
+                np.logical_or(any_velocity_change, any_color_change),
+                any_shape_change,
+            )]
 
     @property
     def sample_mode(self) -> str:
@@ -1129,6 +1213,14 @@ class BouncingBallTask:
     def color_sampler_fixed_vectorized(self):
         return (self._index + self.color_change_indices) % self.num_colors
 
+    def shape_sampler(self):
+        """Generator that yields the current shape index array and advances it
+        by shape_change_indices (set in bouncing_ball_sequence) each step."""
+        yield self._shape_index.copy()
+        while True:
+            self._shape_index = (self._shape_index + self.shape_change_indices) % self.num_shapes
+            yield self._shape_index.copy()
+
     def set_mask_parameters(self):
         if self.mask_fraction is None:
             self.mask_size = 0
@@ -1280,8 +1372,10 @@ class BouncingBallTask:
         velocity,
         masked_color,
         color,
+        shape,
         velocity_change,
         color_change,
+        shape_change,
     ):
         self.all_parameters.append(
             {
@@ -1290,19 +1384,22 @@ class BouncingBallTask:
                 "velocity": velocity,
                 "color_masked": masked_color,
                 "color": color,
+                "shape": shape,
                 "velocity change": velocity_change,
                 "color_change": color_change,
+                "shape_change": shape_change,
             }
         )
         # Increment the change counters
         self.color_change_count += color_change.astype(int)
         self.velocity_change_count += velocity_change.astype(int)
+        self.shape_change_count += shape_change.astype(int)
 
     def output_transformation(self, sample_parameters, target_parameters):
-        # (position, velocity, masked_color, color, velocity_change, color_change)
-        position, _, masked_color, color, _, _ = sample_parameters
+        # (position, velocity, masked_color, color, shape, velocity_change, color_change, shape_change)
+        position, _, masked_color, color, shape, _, _, _ = sample_parameters
         sample_out = self.sample_transformation_dict[self.sample_mode](
-            position, masked_color, color
+            position, masked_color, color, shape
         )
 
         (
@@ -1310,20 +1407,36 @@ class BouncingBallTask:
             _,
             masked_color,
             color,
+            shape,
             velocity_change,
             color_change,
+            shape_change,
         ) = target_parameters
         target_out = self.target_transformation_dict[self.target_mode](
             position,
             masked_color,
             color,
+            shape,
             velocity_change,
             color_change,
+            shape_change,
         )
         self.sequence.append((sample_out, target_out))
         return sample_out, target_out
 
-    def array_transformation(self, position, color, thickness=-1):
+    def array_transformation(self, position, color, shape=None, thickness=-1):
+        if shape is not None:
+            # Use scalar shape for batch_size=1 or per-element shape
+            shape_idx = int(shape[0]) if hasattr(shape, '__len__') else int(shape)
+            return gif.draw_ball(
+                position if not hasattr(position[0], '__len__') else position[0],
+                color if not hasattr(color[0], '__len__') else color[0],
+                self.background,
+                self.ball_radius,
+                self.mask_color,
+                shape=shape_idx,
+                thickness=-1,
+            )
         return gif.draw_circle(
             position,
             color,
@@ -1336,6 +1449,7 @@ class BouncingBallTask:
     def reset_tracking(self):
         self.velocity_changes = []
         self.color_changes = []
+        self.shape_changes = []
         self.all_parameters = []
 
         if self.debug:
@@ -1343,12 +1457,15 @@ class BouncingBallTask:
             self.color_change_count = np.zeros((self.batch_size, 2))
             # Reset the velocity change count to zeros
             self.velocity_change_count = np.zeros((self.batch_size, 2))
+            # Reset the shape change count to zeros
+            self.shape_change_count = np.zeros((self.batch_size, 1))
 
     def bouncing_ball_sequence(
         self,
         position: np.ndarray,
         velocity: np.ndarray,
         color_sequence: Iterator[np.ndarray],
+        shape_sequence: Iterator[np.ndarray],
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Generate a sequence of bouncing ball positions, velocities, and
         colors.
@@ -1387,8 +1504,13 @@ class BouncingBallTask:
         color_changes_combined : np.ndarray
             Boolean array indicating sequences with color changes due to a
                 velocity change or a random color change
+
+        shape_changes_combined : np.ndarray
+            Boolean array indicating sequences with shape changes due to a
+                random shape resample
         """
         color = next(color_sequence)
+        shape = next(shape_sequence)
 
         # Pre-allocate arrays for random samples to reduce function calls
         # Random values for velocity resampling
@@ -1415,6 +1537,12 @@ class BouncingBallTask:
         # Impose initial timesteps cannot change color
         rand_for_color[:self.warmup_t_no_rand_color_change] = 1.0
 
+        # Random values for whether shape changes (only random, never bounce-triggered)
+        rand_for_shape = np.random.uniform(
+            size=(self.sequence_length, self.batch_size)
+        )
+        rand_for_shape[:self.warmup_t_no_rand_shape_change] = 1.0
+
         # Color change array to hold changes at any timestep. Allows for color
         # change delays
         color_change_array = np.zeros(
@@ -1426,17 +1554,29 @@ class BouncingBallTask:
             dtype=bool,
         )
 
+        # Tracks which col-1 color changes were shape-triggered so their
+        # cooldown (min_t_color_change_after_shape_change) can differ from
+        # purely random ones (min_t_color_change_after_random)
+        shape_triggered_color_change_array = np.zeros(
+            (self.sequence_length + self.color_change_delay.max(), self.batch_size),
+            dtype=bool,
+        )
+
         # Preallocated arrays for combined velocity changes and change/no change
         velocity_changes_combined = np.full((self.batch_size, 2), False)   
         velocity_change_nochange = np.full((self.batch_size, 2), False)
+        # Shape changes: only random (dim 0), shape (batch_size, 1)
+        shape_changes_combined = np.full((self.batch_size, 1), False)
 
         # Send out the initial conditions
         yield (
             position.copy(),
             velocity.copy(),
             color,
+            shape.copy(),
             self.initial_changes,
             self.initial_changes,
+            self.initial_shape_changes,
         )
 
         for t in range(1, self.sequence_length):
@@ -1525,12 +1665,47 @@ class BouncingBallTask:
                 indices_velocity_resamples
             ] = 1.0
                         
+            # Shape changes randomly (never at bounces) or forced — computed
+            # before color so shape state can condition color probabilities
+            shape_changes_combined[:, 0] = shape_changes_random = np.logical_or(
+                rand_for_shape[t] <= self.probability_shape_change,
+                self.forced_shape_changes_array[t],
+            )
+
+            # Cooldown: prevent rapid consecutive shape changes
+            rand_for_shape[
+                t + 1 : t + self.min_t_shape_change_after_random + 1,
+                shape_changes_random,
+            ] = 1.0
+
+            # Advance shape index for batch elements that change
+            self.shape_change_indices = shape_changes_random.astype(int)
+
+            # Build per-element effective color-change probabilities conditioned
+            # on (vel_changed, shape_changed):
+            #   col 0 (vel changed):     pccovasc if shape also changed, pccovc otherwise
+            #   col 1 (vel not changed): pccosc   if shape changed,       pccnvc otherwise
+            effective_prob = np.stack(
+                [
+                    np.where(
+                        shape_changes_random,
+                        self.probability_color_change_on_velocity_and_shape_change,
+                        self.probability_color_change_on_velocity_change,
+                    ),
+                    np.where(
+                        shape_changes_random,
+                        self.probability_color_change_on_shape_change,
+                        self.probability_color_change_no_velocity_change,
+                    ),
+                ],
+                axis=-1,
+            )
+
             # Compute the combined indices where the color will change according
-            # to whether the velocity changed or not
+            # to whether the velocity and/or shape changed
             color_changes_combined = np.logical_and(
                 velocity_change_nochange,
-                # np.stack([velocity_changes, no_velocity_changes], axis=-1),
-                rand_for_color[t] <= self.probability_color_change_given_velocity,
+                rand_for_color[t] <= effective_prob,
             )
 
             # Apply color changes to the timestep that gets affected by
@@ -1539,6 +1714,12 @@ class BouncingBallTask:
             color_change_array[
                 self.color_change_target_indices[t], :, [0, 1]
             ] = color_changes_combined.T
+
+            # Record which col-1 changes are shape-triggered at the same
+            # delayed timestep, so the cooldown can distinguish them later
+            shape_triggered_color_change_array[
+                self.color_change_target_indices[t, 1], :
+            ] = np.logical_and(color_changes_combined[:, 1], shape_changes_random)
 
             # Impose color changes cannot happen when transitioning into and out
             # of the grayzone
@@ -1550,7 +1731,6 @@ class BouncingBallTask:
             # Select indices for where color will change
             self.color_change_indices = color_changes = np.logical_or(
                 np.logical_or(*color_change_array[t].T),
-                # color_change_array[t].any(axis=-1),
                 self.forced_color_changes_array[t],
             )
 
@@ -1563,12 +1743,21 @@ class BouncingBallTask:
                 1
             ] = 1.0
             rand_for_color[
-                t + 1 : t + self.min_t_color_change_after_random + 1,
-                color_change_array[t, :, 1],
+                t + 1 : t + self.min_t_color_change_after_shape_change + 1,
+                np.logical_and(
+                    color_change_array[t, :, 1],
+                    shape_triggered_color_change_array[t],
+                ),
                 1
             ] = 1.0
-
-            # import ipdb; ipdb.set_trace()
+            rand_for_color[
+                t + 1 : t + self.min_t_color_change_after_random + 1,
+                np.logical_and(
+                    color_change_array[t, :, 1],
+                    ~shape_triggered_color_change_array[t],
+                ),
+                1
+            ] = 1.0
 
             # Set chance for bounce color change to be 0 for sequences where
             # there was a color change
@@ -1581,6 +1770,9 @@ class BouncingBallTask:
             # Step the color forward in time
             color = next(color_sequence)
 
+            # Step the shape forward in time
+            shape = next(shape_sequence)
+
             # Step the position forward in time
             position += velocity * self.dt
 
@@ -1588,8 +1780,10 @@ class BouncingBallTask:
                 position.copy(), # Must yield copies
                 velocity.copy(),
                 color,
+                shape.copy(),
                 velocity_changes_combined.copy(),
                 color_change_array[t],
+                shape_changes_combined.copy(),
             )
 
     def __iter__(self) -> Iterator[tuple[np.ndarray, np.ndarray]]:
@@ -1630,6 +1824,8 @@ class BouncingBallTask:
                 self.valid_colors,
                 None,
             )
+            self._shape_index = np.random.randint(0, self.num_shapes, size=self.batch_size)
+            self.initial_shape = self._shape_index.copy()
             self.resample_change_probabilities(self.batch_size)
 
         # Reset state tracking for the new sequence
@@ -1637,11 +1833,15 @@ class BouncingBallTask:
         self.task_deque = deque()
         self.sequence = []
 
+        # Reset shape index to initial for this iteration
+        self._shape_index = self.initial_shape.copy()
+
         # Define the iterator
         ball_sequence = self.bouncing_ball_sequence(
             self.initial_position.copy(),
             self.initial_velocity.copy(),
             self.color_sampler(),
+            self.shape_sampler(),
         )
 
         # Reverse it for that sequence mode
@@ -1653,8 +1853,10 @@ class BouncingBallTask:
             position,
             velocity,
             color,
+            shape,
             velocity_change,
             color_change,
+            shape_change,
         ) in enumerate(ball_sequence):
             # Apply the mask to the color based on the ball's position
             masked_color = self.color_mask(position, color)
@@ -1663,8 +1865,10 @@ class BouncingBallTask:
                 velocity,
                 masked_color,
                 color,
+                shape,
                 velocity_change,
                 color_change,
+                shape_change,
             )
 
             # Store the current parameters for future reference
@@ -1693,27 +1897,29 @@ class BouncingBallTask:
         )
 
     def reverse_ball_sequence(self, ball_sequence):
-        # ball_sequence = list()
         # Unpack the sequence (each is a tuple now)
-        pos, vel, col, vel_ch, col_ch = zip(*reversed(list(ball_sequence)))
-        
-        # For color, we want the first element repeated at the start and then
+        pos, vel, col, shp, vel_ch, col_ch, shp_ch = zip(*reversed(list(ball_sequence)))
+
+        # For color and shape, repeat the first element at the start then
         # all but the last element.
         col_new = (col[0],) + col[:-1]
+        shp_new = (shp[0],) + shp[:-1]
 
-        # Precompute a zeros array for the change dims.
+        # Precompute zeros arrays for the change dims.
         zero_vel = np.zeros_like(vel_ch[-1])
         zero_col = np.zeros_like(col_ch[-1])
+        zero_shp = np.zeros_like(shp_ch[-1])
 
-        # For the velocity and color change arrays, we want:
+        # For the change arrays:
         # - first element: last element from the original,
         # - second element: zeros,
         # - then all but the last two elements.
         vel_ch_new = (vel_ch[-1], zero_vel) + vel_ch[:-2]
         col_ch_new = (col_ch[-1], zero_col) + col_ch[:-2]
+        shp_ch_new = (shp_ch[-1], zero_shp) + shp_ch[:-2]
 
         # Return a zipped iterator of the new tuples.
-        return zip(pos, vel, col_new, vel_ch_new, col_ch_new)        
+        return zip(pos, vel, col_new, shp_new, vel_ch_new, col_ch_new, shp_ch_new)        
             
     @classmethod
     def target_to_sample(
@@ -1816,6 +2022,7 @@ class BouncingBallTask:
                 mask_start,
                 mask_end,
                 circle_border_thickness=sample_thickness,
+                shape=int(param[5]) if len(param) > 5 else 0,
             )
             for param in sample_parameters
         ]
@@ -1823,24 +2030,26 @@ class BouncingBallTask:
         if target_parameters is not None:
             if mode == "combined":
                 target_arrays = [
-                    gif.draw_circle(
+                    gif.draw_ball(
                         (param[:2] * multiplier).tolist(),
-                        param[2:].tolist(),
+                        param[2:5].tolist(),
                         sample,
                         ball_radius,
                         mask_color.tolist(),
+                        shape=int(param[5]) if len(param) > 5 else 0,
                     )
                     for param, sample in zip(target_parameters, sample_arrays)
                 ]
 
             else:
                 target_arrays = [
-                    gif.draw_circle(
+                    gif.draw_ball(
                         (param[:2] * multiplier).tolist(),
-                        param[2:].tolist(),
+                        param[2:5].tolist(),
                         background,
                         ball_radius,
                         mask_color.tolist(),
+                        shape=int(param[5]) if len(param) > 5 else 0,
                     )
                     for param in target_parameters
                 ]
@@ -2162,9 +2371,9 @@ if __name__ == "__main__":
         output_to_animate = samples[0]
         args.animate_as_sample = True
     elif args.animate_target:
-        output_to_animate = targets[0, :, :5]
+        output_to_animate = targets[0, :, :6]
     else:
-        output_to_animate = (samples[0], targets[0, :, :5])
+        output_to_animate = (samples[0], targets[0, :, :6])
 
     paths = task.animate(
         output_to_animate,

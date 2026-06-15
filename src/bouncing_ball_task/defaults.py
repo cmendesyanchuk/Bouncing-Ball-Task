@@ -26,6 +26,7 @@ class TaskParameters:
 
     min_t_color_change_after_bounce: int = 15
     min_t_color_change_after_random: int = 15
+    min_t_color_change_after_shape_change: int = 15
     
     min_t_velocity_change_after_bounce: int = 30
     min_t_velocity_change_after_random: int = 15
@@ -47,6 +48,13 @@ class TaskParameters:
     num_x_velocities: int = 1
     num_y_velocities: int = 2
     
+    probability_shape_change: float = 0.001
+    min_t_shape_change_after_random: int = 15
+    warmup_t_no_rand_shape_change: int = 3
+
+    probability_color_change_on_shape_change: float = 0.0
+    probability_color_change_on_velocity_and_shape_change: float = 1.0
+
     color_change_bounce_delay: int = 0
     color_change_random_delay: int = 0
     transitioning_change_mode: Optional[str] = None

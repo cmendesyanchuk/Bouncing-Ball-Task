@@ -48,3 +48,9 @@ default_color_to_idx_dict = {
     color : idx + 1
     for idx, color in enumerate(default_ball_colors)
 }
+
+DEFAULT_SHAPES = (
+    "circle",   # shape index 0
+    "square",   # shape index 1
+    "diamond",  # shape index 2
+)

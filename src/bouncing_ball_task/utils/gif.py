@@ -39,9 +39,38 @@ def draw_circle(
         np.copy(background),
         tuple(np.round(position).astype(int).tolist()),
         ball_radius,
-        color=[255, 255, 255] if color == mask_color else list(color),
+        color=list(color),
         thickness=thickness,
     )
+
+
+def draw_ball(
+    position: Position,
+    color: Color,
+    background: np.ndarray,
+    ball_radius: int,
+    mask_color: Color,
+    shape: int = 0,
+    thickness: int = -1,
+):
+    """Draw a ball with shape 0=circle, 1=square, 2=diamond."""
+    img = np.copy(background)
+    cx, cy = int(round(float(position[0]))), int(round(float(position[1])))
+    r = ball_radius
+    draw_color = [int(c) for c in color]
+
+    if shape == 1:  # square
+        pt1 = (cx - r, cy - r)
+        pt2 = (cx + r, cy + r)
+        return cv2.rectangle(img, pt1, pt2, draw_color, thickness)
+    elif shape == 2:  # diamond
+        pts = np.array([[cx, cy - r], [cx + r, cy], [cx, cy + r], [cx - r, cy]], np.int32)
+        if thickness == -1:
+            return cv2.fillPoly(img, [pts], draw_color)
+        else:
+            return cv2.polylines(img, [pts], True, draw_color, thickness)
+    else:  # circle (default)
+        return cv2.circle(img, (cx, cy), r, draw_color, thickness)
 
 
 def draw_frame(
@@ -53,29 +82,42 @@ def draw_frame(
     mask_start,
     mask_end,
     circle_border_thickness: int = 2,
+    shape: int = 0,
 ):
     frame = np.zeros((*size_frame[::-1], 3), dtype=np.uint8)
-    # import ipdb; ipdb.set_trace()
-    frame = cv2.circle(
+    x_position = position[0]
+
+    # Blend draw color toward mask_color proportional to overlap with the grey zone
+    overlap_width = max(min(x_position + ball_radius, mask_end) - max(x_position - ball_radius, mask_start), 0)
+    overlap_proportion = overlap_width / (2 * ball_radius)
+    blended_color = [
+        int(round(overlap_proportion * mc + (1 - overlap_proportion) * c))
+        for c, mc in zip(color, mask_color)
+    ]
+
+    frame = draw_ball(
+        position,
+        blended_color,
         frame,
-        tuple(np.round(position).astype(int).tolist()),
         ball_radius,
-        color=color,
+        mask_color,
+        shape=shape,
         thickness=-1,
     )
     frame[:, mask_start:mask_end, :] = mask_color
-    x_position = position[0]
 
     if (
         mask_start - ball_radius - circle_border_thickness
         <= x_position
         <= mask_end + ball_radius + circle_border_thickness
     ):
-        frame = cv2.circle(
+        frame = draw_ball(
+            position,
+            [0, 0, 0],
             frame,
-            tuple(np.round(position).astype(int).tolist()),
             ball_radius + int(np.round(circle_border_thickness / 2)),
-            color=[0, 0, 0],
+            mask_color,
+            shape=shape,
             thickness=circle_border_thickness,
         )
     return frame
