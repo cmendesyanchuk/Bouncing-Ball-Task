@@ -1543,6 +1543,13 @@ class BouncingBallTask:
         )
         rand_for_shape[:self.warmup_t_no_rand_shape_change] = 1.0
 
+        # Dedicated random array for pccosc — kept separate from rand_for_color[:,:,1]
+        # so pccnvc cooldowns cannot suppress shape-triggered color changes
+        rand_for_shape_color = np.random.uniform(
+            size=(self.sequence_length, self.batch_size)
+        )
+        rand_for_shape_color[:self.warmup_t_no_rand_color_change] = 1.0
+
         # Color change array to hold changes at any timestep. Allows for color
         # change delays
         color_change_array = np.zeros(
@@ -1681,31 +1688,41 @@ class BouncingBallTask:
             # Advance shape index for batch elements that change
             self.shape_change_indices = shape_changes_random.astype(int)
 
-            # Build per-element effective color-change probabilities conditioned
-            # on (vel_changed, shape_changed):
-            #   col 0 (vel changed):     pccovasc if shape also changed, pccovc otherwise
-            #   col 1 (vel not changed): pccosc   if shape changed,       pccnvc otherwise
-            effective_prob = np.stack(
-                [
-                    np.where(
-                        shape_changes_random,
-                        self.probability_color_change_on_velocity_and_shape_change,
-                        self.probability_color_change_on_velocity_change,
-                    ),
-                    np.where(
-                        shape_changes_random,
-                        self.probability_color_change_on_shape_change,
-                        self.probability_color_change_no_velocity_change,
-                    ),
-                ],
-                axis=-1,
+            # Col-0: vel changed — pccovasc if shape also changed, pccovc otherwise.
+            # Uses rand_for_color[:, :, 0].
+            col0_fires = np.logical_and(
+                velocity_change_nochange[:, 0],
+                rand_for_color[t, :, 0] <= np.where(
+                    shape_changes_random,
+                    self.probability_color_change_on_velocity_and_shape_change,
+                    self.probability_color_change_on_velocity_change,
+                ),
             )
 
-            # Compute the combined indices where the color will change according
-            # to whether the velocity and/or shape changed
-            color_changes_combined = np.logical_and(
-                velocity_change_nochange,
-                rand_for_color[t] <= effective_prob,
+            # Col-1 pccnvc: vel not changed, shape not changed.
+            # Uses rand_for_color[:, :, 1] — subject to its own cooldown.
+            pccnvc_fires = np.logical_and(
+                velocity_change_nochange[:, 1],
+                np.logical_and(
+                    ~shape_changes_random,
+                    rand_for_color[t, :, 1] <= self.probability_color_change_no_velocity_change,
+                ),
+            )
+
+            # Col-1 pccosc: vel not changed, shape changed.
+            # Uses rand_for_shape_color — independent from rand_for_color[:, :, 1]
+            # so pccnvc cooldowns can never suppress shape-triggered color changes.
+            pccosc_fires = np.logical_and(
+                velocity_change_nochange[:, 1],
+                np.logical_and(
+                    shape_changes_random,
+                    rand_for_shape_color[t] <= self.probability_color_change_on_shape_change,
+                ),
+            )
+
+            color_changes_combined = np.stack(
+                [col0_fires, np.logical_or(pccnvc_fires, pccosc_fires)],
+                axis=-1,
             )
 
             # Apply color changes to the timestep that gets affected by
@@ -1715,11 +1732,11 @@ class BouncingBallTask:
                 self.color_change_target_indices[t], :, [0, 1]
             ] = color_changes_combined.T
 
-            # Record which col-1 changes are shape-triggered at the same
-            # delayed timestep, so the cooldown can distinguish them later
+            # Record pccosc fires directly — used to route the col-1 cooldown
+            # to rand_for_shape_color rather than rand_for_color[:, :, 1]
             shape_triggered_color_change_array[
                 self.color_change_target_indices[t, 1], :
-            ] = np.logical_and(color_changes_combined[:, 1], shape_changes_random)
+            ] = pccosc_fires
 
             # Impose color changes cannot happen when transitioning into and out
             # of the grayzone
@@ -1742,14 +1759,16 @@ class BouncingBallTask:
                 color_change_array[t, :, 0],
                 1
             ] = 1.0
-            rand_for_color[
+            # pccosc cooldown: suppress rand_for_shape_color only, leaving
+            # rand_for_color[:, :, 1] untouched so pccnvc is unaffected
+            rand_for_shape_color[
                 t + 1 : t + self.min_t_color_change_after_shape_change + 1,
                 np.logical_and(
                     color_change_array[t, :, 1],
                     shape_triggered_color_change_array[t],
                 ),
-                1
             ] = 1.0
+            # pccnvc cooldown: suppress rand_for_color[:, :, 1] only
             rand_for_color[
                 t + 1 : t + self.min_t_color_change_after_random + 1,
                 np.logical_and(
