@@ -801,7 +801,9 @@ def test_min_t_color_change_causes_predictable_change_statistics(
         return_change=True,
         return_change_mode="source",
         initial_timestep_is_changepoint=False,
-        min_t_color_change=min_t_color_change,
+        min_t_color_change_after_random=min_t_color_change,
+        min_t_color_change_after_bounce=min_t_color_change,
+        min_t_color_change_after_shape_change=min_t_color_change,
         color_change_bounce_delay=0,
     )
 
@@ -909,6 +911,15 @@ def test_min_t_color_change_causes_predictable_change_statistics(
         )
     ) * fraction_no_velocity_changes
 
+    # KNOWN ISSUE (flagged 2026-06-16, not yet fixed): this assertion still fails
+    # for most parametrizations even after fixing the dead `min_t_color_change`
+    # kwarg above. corrected_pccnvc runs ~15% below `pccnvc` even at
+    # min_t_color_change=0 (i.e. independent of any cooldown), and is unaffected
+    # by pvc or by disabling shape changes. Likely cause: bouncing_ball.py
+    # suppresses random color changes while transitioning into/out of the
+    # grayzone, a masking effect this formula doesn't model at all. Needs a
+    # follow-up fix to the formula (or a looser tolerance) before this test can
+    # be trusted.
     assert isclose(corrected_pccnvc, pccnvc, rel_tol=0.05)
 
 
