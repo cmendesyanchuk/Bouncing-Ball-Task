@@ -567,7 +567,7 @@ class BouncingBallTask:
     def transitioning_change_mode(self) -> str:
         return self._transitioning_change_mode
 
-    @return_change_mode.setter
+    @transitioning_change_mode.setter
     def transitioning_change_mode(self, mode: Optional[str]):
         logger.debug("Running transitioning_change_mode setter")
         if mode is not None:
