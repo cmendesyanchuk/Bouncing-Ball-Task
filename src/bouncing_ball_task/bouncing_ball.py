@@ -923,7 +923,7 @@ class BouncingBallTask:
             self.infer_grayzone_locations(positions_targets, mode="outer")
             & ~self.infer_grayzone_locations(positions_targets, mode="inner")
         )
-        samples[mask_locations_samples, 2:] = self.targets[mask_locations_targets, 2:5]
+        samples[mask_locations_samples, 2:] = self.targets[mask_locations_targets, 2:6]
         return samples
 
     def sample_position(self) -> np.ndarray:
