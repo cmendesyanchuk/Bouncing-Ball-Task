@@ -871,8 +871,8 @@ def save_video_dataset(
             pickle.dump(dict_metadata, handle)
 
     path_videos = []
-    sample_columns = ["x", "y", "r", "g", "b"]
-    target_columns = sample_columns + ["vc_bounce", "vc_random", "cc_bounce", "cc_random"]        
+    sample_columns = ["x", "y", "r", "g", "b", "shape"]
+    target_columns = sample_columns + ["vc_bounce", "vc_random", "cc_bounce", "cc_random", "sc_random"]
     
     for idx_video in df_data.index:
         params = df_data.loc[idx_video]
