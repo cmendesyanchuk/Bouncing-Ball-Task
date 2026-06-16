@@ -1,4 +1,4 @@
-# Bouncing Ball Task — Bug Diagnosis
+# #Bouncing Ball Task — Bug Diagnosis
 **Date:** 2026-06-16
 **Scope:** Full `src/bouncing_ball_task/` tree, prompted by a review of `bouncing_ball.py`
 
