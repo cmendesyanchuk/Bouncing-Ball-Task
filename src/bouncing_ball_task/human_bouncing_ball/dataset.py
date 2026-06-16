@@ -782,7 +782,7 @@ def adjust_dataset_labels(
     mask_model_samples_nongray = model_samples[:, :, 2] != 127
     assert (
         (
-            targets[mask_model_samples_nongray, 2:5] ==
+            targets[mask_model_samples_nongray, 2:6] ==
             model_samples[mask_model_samples_nongray, 2:]
         ).all()
     )
