@@ -65,3 +65,18 @@
 | `min_t_shape_change_after_random` | `15` | Cooldown: min timesteps before another shape change after one occurred |
 | `warmup_t_no_rand_shape_change` | `3` | Initial timesteps during which shape changes are blocked |
 | `forced_shape_changes` | `None` | Timesteps to force a shape change |
+
+## Cooldown Parameters (defaults)
+
+| Parameter | Default | Description |
+|---|---|---|
+| `min_t_color_change_after_random` | 5 | Min timesteps before another pccnvc color change after a random one |
+| `min_t_color_change_after_bounce` | 5 | Min timesteps before another pccnvc color change after a bounce-triggered one |
+| `min_t_color_change_after_shape_change` | 5 | Min timesteps before another color change after a shape-triggered one |
+| `min_t_bounce_color_change_after_random` | 3 | Min timesteps before a bounce-triggered (col-0) color change after a col-1 one |
+| `min_t_velocity_change_after_random` | 5 | Min timesteps before another random velocity resample |
+| `min_t_velocity_change_after_bounce` | 5 | Min timesteps before a random velocity resample after a bounce |
+| `min_t_shape_change_after_random` | 15 | Min timesteps before another random shape change |
+| `warmup_t_no_rand_color_change` | 3 | Initial timesteps during which no random color change can fire |
+| `warmup_t_no_rand_velocity_change` | 3 | Initial timesteps during which no random velocity change can fire |
+| `warmup_t_no_rand_shape_change` | 3 | Initial timesteps during which no random shape change can fire |
