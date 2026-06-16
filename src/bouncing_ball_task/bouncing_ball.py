@@ -1137,7 +1137,7 @@ class BouncingBallTask:
             elif valid_colors.lower() == "constant":
                 valid_colors = list(CONSTANT_COLOR)
             else:
-                raise ValueError(f"Invalid str color input, '{valid_color}'")
+                raise ValueError(f"Invalid str color input, '{valid_colors}'")
 
         # Go off passed valid colors
         if valid_colors is not None:
