@@ -288,3 +288,15 @@ These are already supported by `BouncingBallTask` and reachable via any trial ty
 4. Confirm `"Final Color"` is correct (not contaminated by shape column) by cross-checking against known initial color values across a short run — this validates the `2:5` slice fix.
 
 5. Confirm `compute_trial_shape_stats` cycling: assert that no shape index is over- or under-represented by more than 1 across `num_trials` (same guarantee `repeat_sequence` gives color).
+
+## Implementation Complete
+
+Implementation complete. Here's what was done:
+
+Section A — defaults.py: Added 7 fields to HumanDatasetParameters (psc, pccosc_lower/upper/num, pccovasc_lower/upper/num), auto-inherited by ModelDatasetParameters and NongrayDatasetParameters.
+
+Section B — htaskutils.py: Added DEFAULT_SHAPES import; added 7 new params (with defaults) to generate_initial_dict_metadata and stored their linspaces; added compute_trial_shape_stats; extended group_trial_data to 15-field tuples; updated print_type_stats unpack and shape stats; updated print_block_stats with shape/PSC/PCCOSC/PCCOVASC counts.
+
+Section C — dataset.py: Imported DEFAULT_SHAPES; threaded 7 new params through generate_video_parameters; updated generate_video_dataset unpack to 15 fields and wired all 5 shape params into task_parameters_type; updated shorten_trials_and_update_meta with explicit unpack and Final Shape/PSC/PCCOSC/PCCOVASC meta fields; fixed the latent 2: → 2:5 slice bug in both shorten_trials_and_update_meta and adjust_dataset_labels.
+
+Section D — All 10 trial generators: Added compute_trial_shape_stats call and shape kwargs to group_trial_data; added warmup_t_no_rand_shape_change to catch.py and ncc_nvc.py overrides dicts.
