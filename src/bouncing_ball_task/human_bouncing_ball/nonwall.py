@@ -162,7 +162,13 @@ def generate_nonwall_trials(
         num_trials,
         dict_meta,
         dict_meta_type,
-    )    
+    )
+
+    initial_shape, pccosc, pccovasc, dict_meta_type = htaskutils.compute_trial_shape_stats(
+        num_trials,
+        dict_meta,
+        dict_meta_type,
+    )
 
     trials = htaskutils.group_trial_data(
         num_trials,
@@ -174,6 +180,10 @@ def generate_nonwall_trials(
         dict_meta["pvc"],
         bounce_index_x=bounce_index_x,
         bounce_index_y=bounce_index_y,
+        initial_shape=initial_shape,
+        psc=dict_meta["psc"],
+        pccosc=pccosc,
+        pccovasc=pccovasc,
         dict_meta_trials=dict_meta_trials,
     )
 

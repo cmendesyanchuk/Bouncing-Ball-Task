@@ -17,6 +17,7 @@ from bouncing_ball_task import index
 from bouncing_ball_task.constants import (
     default_ball_colors,
     default_color_to_idx_dict,
+    DEFAULT_SHAPES,
 )
 from bouncing_ball_task.bouncing_ball import BouncingBallTask
 from bouncing_ball_task.utils import logutils, pyutils, taskutils, htaskutils
@@ -105,7 +106,7 @@ def generate_video_dataset(
     for trial_type, params in dict_params.items():
         list_params_type += params
         
-        positions, velocities, colors, pccnvcs, pccovcs, pvcs, fxvc, fyvc, fcc, meta_trials = (
+        positions, velocities, colors, pccnvcs, pccovcs, pvcs, fxvc, fyvc, fcc, shapes, pscs, fsc, pccoscs, pccovAscs, meta_trials = (
             list(param) for param in zip(*params)
         )
             
@@ -120,6 +121,11 @@ def generate_video_dataset(
         task_parameters_type["forced_velocity_bounce_x"] = fxvc
         task_parameters_type["forced_velocity_bounce_y"] = fyvc
         task_parameters_type["forced_color_changes"] = fcc
+        task_parameters_type["initial_shape"] = shapes
+        task_parameters_type["probability_shape_change"] = pscs
+        task_parameters_type["forced_shape_changes"] = fsc
+        task_parameters_type["probability_color_change_on_shape_change"] = pccoscs
+        task_parameters_type["probability_color_change_on_velocity_and_shape_change"] = pccovAscs
         task_parameters_type["batch_size"] = len(positions)
 
         # Apply overrides if they are defined
@@ -233,7 +239,14 @@ def generate_video_parameters(
     bounce_timestep: int = defaults.bounce_timestep,
     repeat_factor: int = defaults.repeat_factor,
     seed: Optional[int] = defaults.seed,
-    dict_trial_type_generation_funcs=dict_trial_type_generation_funcs,        
+    psc: float = defaults.psc,
+    pccosc_lower: float = defaults.pccosc_lower,
+    pccosc_upper: float = defaults.pccosc_upper,
+    num_pccosc: int = defaults.num_pccosc,
+    pccovasc_lower: float = defaults.pccovasc_lower,
+    pccovasc_upper: float = defaults.pccovasc_upper,
+    num_pccovasc: int = defaults.num_pccovasc,
+    dict_trial_type_generation_funcs=dict_trial_type_generation_funcs,
     **kwargs,
 ):
     # Set the seed
@@ -283,8 +296,15 @@ def generate_video_parameters(
         num_pos_x_linspace_bounce,
         idx_linspace_bounce,
         bounce_timestep,
-        repeat_factor,        
+        repeat_factor,
         seed,
+        psc=psc,
+        pccosc_lower=pccosc_lower,
+        pccosc_upper=pccosc_upper,
+        num_pccosc=num_pccosc,
+        pccovasc_lower=pccovasc_lower,
+        pccovasc_upper=pccovasc_upper,
+        num_pccovasc=num_pccovasc,
         **kwargs,
     )
 
@@ -430,7 +450,7 @@ def shorten_trials_and_update_meta(
         )
     ):
         # Grab the relevant params
-        position, velocity, _, pccnvc, pccovc, pvc, *_, meta_trial = param
+        position, velocity, _, pccnvc, pccovc, pvc, _, _, _, initial_shape, psc_val, _, pccosc_val, pccovasc_val, meta_trial = param
 
         length = meta_trial["length"]
 
@@ -443,7 +463,8 @@ def shorten_trials_and_update_meta(
         # Update the metadata for the trial
         meta_trial.update(
             {
-                "Final Color": default_ball_colors[np.argmax(target[-1, 2:])],
+                "Final Color": default_ball_colors[np.argmax(target[-1, 2:5])],
+                "Final Shape": DEFAULT_SHAPES[int(target[-1, 5])],
                 "Final X Position": sample[-1, 0],
                 "Final Y Position": sample[-1, 1],
                 "Final X Velocity": -velocity[0],
@@ -451,6 +472,9 @@ def shorten_trials_and_update_meta(
                 "PCCNVC": pccnvc,
                 "PCCOVC": pccovc,
                 "PVC": pvc,
+                "PSC": psc_val,
+                "PCCOSC": pccosc_val,
+                "PCCOVASC": pccovasc_val,
                 "length_ms": length * duration,
             }
         )
@@ -793,7 +817,7 @@ def adjust_dataset_labels(
     df_data["last_visible_color"] = 1 + samples[
         range(batch_size),
         last_idx,
-        2:
+        2:5
     ].argmax(axis=1)
     df_data["color_entered"] = df_data["last_visible_color"]
     df_data["color_next"] = (df_data["color_entered"] % 3) + 1

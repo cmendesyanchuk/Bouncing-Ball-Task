@@ -116,6 +116,12 @@ def generate_ncc_nvc_trials(
         dict_meta_type,
     )
 
+    initial_shape, pccosc, pccovasc, dict_meta_type = htaskutils.compute_trial_shape_stats(
+        num_trials,
+        dict_meta,
+        dict_meta_type,
+    )
+
     trials = htaskutils.group_trial_data(
         num_trials,
         final_position,
@@ -124,12 +130,17 @@ def generate_ncc_nvc_trials(
         pccnvc,
         pccovc,
         dict_meta["pvc"],
+        initial_shape=initial_shape,
+        psc=dict_meta["psc"],
+        pccosc=pccosc,
+        pccovasc=pccovasc,
         dict_meta_trials=dict_meta_trials,
     )
 
     dict_meta_type["overrides"] = {
         "warmup_t_no_rand_velocity_change": ncc_nvc_timesteps,
         "warmup_t_no_rand_color_change": ncc_nvc_timesteps,
+        "warmup_t_no_rand_shape_change": ncc_nvc_timesteps,
     }
 
     return trials, dict_meta_type

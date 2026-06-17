@@ -128,6 +128,12 @@ def generate_cc_rvc_trials(
         dict_meta_type,
     )
 
+    initial_shape, pccosc, pccovasc, dict_meta_type = htaskutils.compute_trial_shape_stats(
+        num_trials,
+        dict_meta,
+        dict_meta_type,
+    )
+
     trials = htaskutils.group_trial_data(
         num_trials,
         final_position,
@@ -138,6 +144,10 @@ def generate_cc_rvc_trials(
         dict_meta["pvc"],
         bounce_index_x=bounce_index_x,
         color_change_index=color_change_index,
+        initial_shape=initial_shape,
+        psc=dict_meta["psc"],
+        pccosc=pccosc,
+        pccovasc=pccovasc,
         dict_meta_trials=dict_meta_trials,
     )
 

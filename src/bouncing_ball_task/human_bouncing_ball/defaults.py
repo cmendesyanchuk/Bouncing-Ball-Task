@@ -48,6 +48,16 @@ class HumanDatasetParameters:
     num_pccnvc: int = 2
     num_pccovc: int = 3
 
+    psc: float = 0.001
+
+    pccosc_lower: float = 0.0
+    pccosc_upper: float = 0.0
+    num_pccosc: int = 1
+
+    pccovasc_lower: float = 1.0
+    pccovasc_upper: float = 1.0
+    num_pccovasc: int = 1
+
     num_y_velocities: int = 2
     velocity_lower: float = 0.1
     velocity_upper: float = 0.12

@@ -6,7 +6,7 @@ import numpy as np
 from loguru import logger
 
 from bouncing_ball_task.utils import pyutils
-from bouncing_ball_task.constants import DEFAULT_COLORS
+from bouncing_ball_task.constants import DEFAULT_COLORS, DEFAULT_SHAPES
 from bouncing_ball_task.bouncing_ball import BouncingBallTask
 
 
@@ -44,7 +44,7 @@ def print_type_stats(
     else:
         out_funcs = [print] * 2 
     
-    position, velocity, color, pccnvc, pccovc, pvc, fxvc, fyvc, fcc, meta = zip(*trials)
+    position, velocity, color, pccnvc, pccovc, pvc, fxvc, fyvc, fcc, initial_shapes, pscs, fsc, pccosc_vals, pccovasc_vals, meta = zip(*trials)
     stats_comb = [f"{nvc}-{ovc}" for nvc, ovc in zip(pccnvc, pccovc)]
     list_messages = []
 
@@ -71,6 +71,9 @@ def print_type_stats(
         ("pccnvc Splits:", Counter(pccnvc)),
         ("pccovc Splits:", Counter(pccovc)),
         ("Stat Comb Splits:", Counter(stats_comb)),
+        ("Shape Splits:", Counter(initial_shapes)),
+        ("pccosc Splits:", Counter(pccosc_vals)),
+        ("pccovasc Splits:", Counter(pccovasc_vals)),
     ]
 
     if trial_type.lower() != "catch":
@@ -140,6 +143,10 @@ def print_block_stats(df_data, dict_metadata, duration, use_logger=True):
             ("pccnvc Counts:", Counter(df_block["PCCNVC"])),
             ("pccovc Counts:", Counter(df_block["PCCOVC"])),
             ("stats comb Counts:", Counter(stats_comb)),
+            ("Shape Counts:", Counter(df_block["Final Shape"].values)),
+            ("PSC Counts:", Counter(df_block["PSC"])),
+            ("pccosc Counts:", Counter(df_block["PCCOSC"])),
+            ("pccovasc Counts:", Counter(df_block["PCCOVASC"])),
         ]
         
         max_desc_len = max([len(desc) for (desc, _) in block_stats])
@@ -450,10 +457,16 @@ def generate_initial_dict_metadata(
         num_pos_x_linspace_bounce,
         idx_linspace_bounce,
         bounce_timestep,
-        repeat_factor,        
+        repeat_factor,
         seed,
         min_pos_x_endpoints=2,
-        
+        psc=0.001,
+        pccosc_lower=0.0,
+        pccosc_upper=0.0,
+        num_pccosc=1,
+        pccovasc_lower=1.0,
+        pccovasc_upper=1.0,
+        num_pccovasc=1,
         **kwargs,
 ):
     # Convenience
@@ -532,6 +545,20 @@ def generate_initial_dict_metadata(
         pccovc_lower,
         pccovc_upper,
         num_pccovc,
+        endpoint=True,
+    )
+
+    dict_metadata["psc"] = psc
+    dict_metadata["pccosc_linspace"] = np.linspace(
+        pccosc_lower,
+        pccosc_upper,
+        num_pccosc,
+        endpoint=True,
+    )
+    dict_metadata["pccovasc_linspace"] = np.linspace(
+        pccovasc_lower,
+        pccovasc_upper,
+        num_pccovasc,
         endpoint=True,
     )
 
@@ -680,8 +707,31 @@ def compute_trial_color_and_stats(
         axis=0,
     )
 
-    return final_color, pccnvc, pccovc, dict_meta_type    
-    
+    return final_color, pccnvc, pccovc, dict_meta_type
+
+
+def compute_trial_shape_stats(num_trials, dict_meta, dict_meta_type):
+    initial_shape = pyutils.repeat_sequence(
+        np.arange(len(DEFAULT_SHAPES)),
+        num_trials,
+        shuffle=True,
+        roll=False,
+        shift=1,
+    ).astype(int).tolist()
+    dict_meta_type["initial_shape_counts"] = np.unique(initial_shape, return_counts=True)
+
+    pccosc = pyutils.repeat_sequence(
+        dict_meta["pccosc_linspace"], num_trials, shuffle=False, roll=True,
+    ).tolist()
+    dict_meta_type["pccosc_counts"] = np.unique(pccosc, return_counts=True)
+
+    pccovasc = pyutils.repeat_sequence(
+        dict_meta["pccovasc_linspace"], num_trials, shuffle=False,
+    ).tolist()
+    dict_meta_type["pccovasc_counts"] = np.unique(pccovasc, return_counts=True)
+
+    return initial_shape, pccosc, pccovasc, dict_meta_type
+
 
 def group_trial_data(
         num_trials,
@@ -694,6 +744,11 @@ def group_trial_data(
         bounce_index_x=None,
         bounce_index_y=None,
         color_change_index=None,
+        initial_shape=None,
+        psc=None,
+        shape_change_index=None,
+        pccosc=None,
+        pccovasc=None,
         dict_meta_trials=None,
 ):
     if bounce_index_x is None:
@@ -705,8 +760,29 @@ def group_trial_data(
     if color_change_index is None:
         color_change_index = [[],] * num_trials
 
+    if shape_change_index is None:
+        shape_change_index = [[],] * num_trials
+
     if not pyutils.isiterable(pvc):
         pvc = [pvc,] * num_trials
+
+    if psc is None:
+        psc = 0.001
+    if not pyutils.isiterable(psc):
+        psc = [psc,] * num_trials
+
+    if pccosc is None:
+        pccosc = 0.0
+    if not pyutils.isiterable(pccosc):
+        pccosc = [pccosc,] * num_trials
+
+    if pccovasc is None:
+        pccovasc = 1.0
+    if not pyutils.isiterable(pccovasc):
+        pccovasc = [pccovasc,] * num_trials
+
+    if initial_shape is None:
+        initial_shape = [0,] * num_trials
 
     list_to_zip = [
         final_position,
@@ -718,6 +794,11 @@ def group_trial_data(
         bounce_index_x,
         bounce_index_y,
         color_change_index,
+        initial_shape,
+        psc,
+        shape_change_index,
+        pccosc,
+        pccovasc,
     ]
 
     if dict_meta_trials is not None:
