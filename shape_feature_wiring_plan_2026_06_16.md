@@ -300,3 +300,36 @@ Section B — htaskutils.py: Added DEFAULT_SHAPES import; added 7 new params (wi
 Section C — dataset.py: Imported DEFAULT_SHAPES; threaded 7 new params through generate_video_parameters; updated generate_video_dataset unpack to 15 fields and wired all 5 shape params into task_parameters_type; updated shorten_trials_and_update_meta with explicit unpack and Final Shape/PSC/PCCOSC/PCCOVASC meta fields; fixed the latent 2: → 2:5 slice bug in both shorten_trials_and_update_meta and adjust_dataset_labels.
 
 Section D — All 10 trial generators: Added compute_trial_shape_stats call and shape kwargs to group_trial_data; added warmup_t_no_rand_shape_change to catch.py and ncc_nvc.py overrides dicts.
+
+## Edits to Bouncing-Ball-Task/src/bouncing_ball_task/human_bouncing_ball/dataset.py Upon Trying to Run It
+
+Root cause: When bouncing_ball.py added shape support, the target array grew from 9 → 11 columns:
+
+Old: [x, y, r, g, b, vc_bounce, vc_random, cc_bounce, cc_random]
+New: [x, y, r, g, b, shape, vc_bounce, vc_random, cc_bounce, cc_random, sc_random]
+Five places still use the old negative indexing, now hitting the wrong columns:
+
+Location	Old meaning	New (broken) meaning
+targets[mask_reset, -1]	cc_random (col 8)	sc_random (col 10) — wrong column zeroed
+targets[mask_changes, -1]	cc_random (col 8)	sc_random (col 10) — new changes written to wrong col
+targets[:, :, -2:]	[cc_bounce, cc_random]	[cc_random, sc_random] — shape changes counted as color changes → wrong color_idx_sequences → assertion fails
+samples[mask_nongrayzone, 2:]	[r, g, b] (3 cols)	[r, g, b, shape] (4 cols) — RHS is 3 cols, shape mismatch
+target[:idx, -4:] in compute_effective_stats	[vc_bounce, vc_random, cc_bounce, cc_random]	[vc_random, cc_bounce, cc_random, sc_random] — wrong stats
+These were latent since the simulation core was extended to 11 columns; the Bug #26 wiring now enables the pipeline to run end-to-end and exposes them.
+
+Fixes — all absolute column indices to match the new 11-column layout:
+
+-1 → 9 (cc_random) for both mask_reset and mask_changes
+-2: → 8:10 (cc_bounce, cc_random)
+samples[..., 2:] → samples[..., 2:5]
+-4: → 6:10 (vc_bounce, vc_random, cc_bounce, cc_random)
+
+All five edits are correct. Summary of what changed and why:
+
+Line	Before	After	Why
+565	target[:idx, -4:]	target[:idx, 6:10]	-4: now means [vc_random, cc_bounce, cc_random, sc_random]; need [vc_bounce, vc_random, cc_bounce, cc_random]
+764	targets[mask_reset, -1]	targets[mask_reset, 9]	-1 now points to sc_random; col 9 is cc_random
+778	targets[mask_changes, -1]	targets[mask_changes, 9]	Same
+781	targets[:, :, -2:]	targets[:, :, 8:10]	-2: now selects [cc_random, sc_random]; shape changes were being counted as color changes
+795	samples[mask_nongrayzone, 2:]	samples[mask_nongrayzone, 2:5]	samples now has 6 columns so 2: is 4 cols (r,g,b,shape) but RHS was only 3
+
